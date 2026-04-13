@@ -9,7 +9,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 
 # Cache dependency downloads before copying source
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 # Copy source
