@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: url-checker
+  namespace: url-checker
+  labels:
+    app: url-checker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: url-checker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # 1 extra pod tijdens update
+      maxUnavailable: 0  # nooit minder dan 2 pods beschikbaar
+  template:
+    metadata:
+      labels:
+        app: url-checker
+    spec:
+      # Veiligheid: draai nooit als root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: url-checker
+          image: ghcr.io/mohammad-shexo/url-checker:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+          resources:
+            requests:
+              cpu: "100m"      # 0.1 CPU core minimum
+              memory: "64Mi"   # 64 MB minimum
+            limits:
+              cpu: "200m"      # 0.2 CPU core maximum
+              memory: "128Mi"  # 128 MB maximum
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
