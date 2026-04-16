@@ -235,7 +235,7 @@ Simple liveness probe.
 ### Clone and Run
 
 ```bash
-git clone https://github.com/<your-org>/url-checker.git
+git clone https://github.com/mohammad-shexo/url-checker.git
 cd url-checker
 
 # Download dependencies
@@ -291,7 +291,7 @@ docker run -p 8080:8080 ghcr.io/<your-org>/url-checker:latest
 
 Tests live in `tests/` and are split into two files:
 
-| File | Focus |
+| File | Focus |&
 |---|---|
 | `checker_service_test.go` | Unit tests for the `Checker` service |
 | `check_handler_test.go` | Integration tests using `httptest` |
