@@ -275,8 +275,8 @@ docker run -p 8080:8080 url-checker:latest
 ### Using the GitHub Container Registry image
 
 ```bash
-docker pull ghcr.io/<your-org>/url-checker:latest
-docker run -p 8080:8080 ghcr.io/<your-org>/url-checker:latest
+docker pull ghcr.io/mohammad-shexo/url-checker:latest
+docker run -p 8080:8080 ghcr.io/mohammad-shexo/url-checker:latest
 ```
 
 ### Environment Variables
@@ -291,7 +291,7 @@ docker run -p 8080:8080 ghcr.io/<your-org>/url-checker:latest
 
 Tests live in `tests/` and are split into two files:
 
-| File | Focus |&
+| File | Focus |
 |---|---|
 | `checker_service_test.go` | Unit tests for the `Checker` service |
 | `check_handler_test.go` | Integration tests using `httptest` |
@@ -392,7 +392,7 @@ spec:
     spec:
       containers:
         - name: url-checker
-          image: ghcr.io/<your-org>/url-checker:latest
+          image: ghcr.io/mohammad-shexo/url-checker:latest
           ports:
             - containerPort: 8080
           env:
@@ -436,3 +436,250 @@ spec:
 - **Graceful shutdown** — catch `SIGTERM`, drain in-flight goroutines before exit
 - **Configurable max URLs** — environment variable override for the 50-URL cap
 - **HEAD → GET fallback** — automatically retry with GET when server rejects HEAD
+
+---
+
+## Kubernetes Deployment
+
+> Deze sectie beschrijft hoe je de URL Status Checker deployt op een lokale Kubernetes cluster via **Minikube**. Dit is de volgende stap na Docker: in plaats van één container op één machine, beheert Kubernetes meerdere containers over meerdere machines automatisch.
+
+---
+
+### Waarom Kubernetes?
+
+| Probleem zonder K8s | Oplossing met K8s |
+|---|---|
+| Container crasht → app is offline | Kubernetes herstart hem automatisch |
+| Veel verkeer → één container overbelast | Kubernetes schaalt naar meerdere replicas |
+| Update deployen → even offline | Rolling update: geen downtime |
+| Handmatig monitoren | Liveness & readiness probes automatisch |
+
+---
+
+### Architectuur
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         Namespace: url-checker       │
+                    │                                      │
+  HTTP verkeer      │  ┌──────────────────────────────┐   │
+  ──────────────►   │  │     Service (LoadBalancer)    │   │
+  poort 80          │  │     poort 80 → 8080           │   │
+                    │  └──────────────┬───────────────┘   │
+                    │                 │ load balancing     │
+                    │        ┌────────┴────────┐           │
+                    │        ▼                 ▼           │
+                    │  ┌──────────┐     ┌──────────┐       │
+                    │  │  Pod 1   │     │  Pod 2   │       │
+                    │  │ :8080    │     │ :8080    │       │
+                    │  └──────────┘     └──────────┘       │
+                    │                                      │
+                    │  ┌──────────┐                        │
+                    │  │ BusyBox  │  (testpod)             │
+                    │  └──────────┘                        │
+                    └─────────────────────────────────────┘
+```
+
+---
+
+### Vereisten
+
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) geïnstalleerd
+- [Minikube](https://minikube.sigs.k8s.io/docs/start/) geïnstalleerd
+- Docker geïnstalleerd en actief
+
+Controleer installaties:
+```bash
+kubectl version --client
+minikube version
+```
+
+---
+
+### Stap 1 — Minikube starten
+
+```bash
+minikube start
+```
+
+Controleer of de cluster actief is:
+```bash
+minikube status
+```
+
+Je ziet:
+```
+minikube: Running
+kubelet:  Running
+apiserver: Running
+```
+
+---
+
+### Stap 2 — Docker image instellen
+
+Vervang in `k8s/deployment.yaml` de image-regel:
+```yaml
+image: ghcr.io/mohammad-shexo/url-checker:latest
+```
+door jouw echte GitHub gebruikersnaam.
+
+Of gebruik de Minikube ingebouwde Docker daemon zodat je niet hoeft te pushen:
+```bash
+eval $(minikube docker-env)
+docker build -t url-checker:local .
+```
+
+Pas dan de deployment aan:
+```yaml
+image: url-checker:local
+imagePullPolicy: Never
+```
+
+---
+
+### Stap 3 — Manifests toepassen
+
+Pas alle bestanden toe in de juiste volgorde:
+
+```bash
+# 1. Namespace aanmaken
+kubectl apply -f k8s/namespace.yaml
+
+# 2. Deployment aanmaken (2 pods)
+kubectl apply -f k8s/deployment.yaml
+
+# 3. Service aanmaken (LoadBalancer)
+kubectl apply -f k8s/service.yaml
+```
+
+---
+
+### Stap 4 — Pods en services verifiëren
+
+```bash
+# Pods bekijken
+kubectl get pods -n url-checker
+
+# Verwacht output:
+# NAME                           READY   STATUS    RESTARTS   AGE
+# url-checker-6d4f8b9c7d-abc12   1/1     Running   0          30s
+# url-checker-6d4f8b9c7d-def34   1/1     Running   0          30s
+
+# Service bekijken
+kubectl get service -n url-checker
+
+# Verwacht output:
+# NAME          TYPE           CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
+# url-checker   LoadBalancer   10.96.123.456   <pending>     80:31234/TCP   30s
+```
+
+---
+
+### Stap 5 — Service openen via Minikube
+
+Minikube ondersteunt LoadBalancer via een apart commando:
+
+```bash
+minikube service url-checker -n url-checker
+```
+
+Minikube opent automatisch de browser of toont de URL, bijv.:
+```
+http://192.168.49.2:31234
+```
+
+Test de API:
+```bash
+curl -X POST http://192.168.49.2:31234/check \
+  -H "Content-Type: application/json" \
+  -d '{"urls": ["https://google.com"]}'
+```
+
+---
+
+### Stap 6 — BusyBox connectiviteitstest
+
+```bash
+# Testpod starten
+kubectl apply -f k8s/busybox.yaml
+
+# Logs bekijken (wacht tot pod klaar is)
+kubectl logs busybox-test -n url-checker
+```
+
+Verwacht output:
+```
+=== URL Checker connectiviteitstest ===
+
+Test 1: Health check
+{"status":"ok"}
+
+Test 2: POST /check met geldige URLs
+{"results":[{"url":"https://google.com","status":301,...}]}
+
+Test 3: POST /check met ongeldige URL
+{"results":[{"url":"https://...invalid","status":0,"error":"[dns]..."}]}
+
+=== Test voltooid ===
+```
+
+---
+
+### Stap 7 — Logs bekijken
+
+```bash
+# Logs van alle pods tegelijk
+kubectl logs -l app=url-checker -n url-checker
+
+# Logs van één specifieke pod
+kubectl logs url-checker-6d4f8b9c7d-abc12 -n url-checker
+
+# Live meekijken
+kubectl logs -f url-checker-6d4f8b9c7d-abc12 -n url-checker
+```
+
+---
+
+### Stap 8 — Pod details inspecteren
+
+```bash
+kubectl describe pod url-checker-6d4f8b9c7d-abc12 -n url-checker
+```
+
+Toont: events, resource gebruik, probe-resultaten en foutmeldingen.
+
+---
+
+### Troubleshooting
+
+| Fout | Oorzaak | Oplossing |
+|---|---|---|
+| `CrashLoopBackOff` | Container crasht bij opstarten | `kubectl logs <pod> -n url-checker` bekijken |
+| `ImagePullBackOff` | Image niet gevonden | Image naam controleren in deployment.yaml |
+| `Pending` | Onvoldoende resources | `kubectl describe pod` bekijken voor reden |
+| `0/1 Ready` | Readiness probe faalt | `/health` endpoint controleren |
+
+---
+
+### Opruimen
+
+```bash
+# Alles verwijderen binnen de namespace
+kubectl delete namespace url-checker
+
+# Minikube stoppen
+minikube stop
+```
+
+---
+
+### Security toelichting
+
+| Maatregel | Status | Uitleg |
+|---|---|---|
+| Non-root gebruiker | ✅ Toegepast | `runAsUser: 1000` in securityContext |
+| Minimale image | ✅ Toegepast | Alpine in Dockerfile |
+| Resource limieten | ✅ Toegepast | CPU en memory limits in deployment |
+| RBAC | ⬜ Niet toegepast | Buiten scope voor lokale Minikube omgeving |
+| Secrets | ⬜ Niet toegepast | Geen gevoelige data in deze applicatie |
